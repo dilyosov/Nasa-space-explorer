@@ -1,7 +1,9 @@
-// NASA APOD fetch and UI wiring
-// We use the public DEMO_KEY by default. For production, replace with your own API key.
+// Data source config
+// For the classroom exercise use the provided CDN JSON feed (an array of APOD-like objects).
+const DATA_JSON_URL = 'https://cdn.jsdelivr.net/gh/GCA-Classroom/apod/data.json';
+// Keep NASA API constants for reference, but we fetch the CDN feed by default.
 const NASA_API_URL = 'https://api.nasa.gov/planetary/apod';
-const API_KEY = '0KY3m2wZ9CBLKOVAxo0XMfmH10JJdVoSzrbkYNsr'; // rate-limited; swap with your key for heavier use
+const API_KEY = ''; // not used when fetching the classroom CDN JSON
 
 document.addEventListener('DOMContentLoaded', () => {
 	// Small 'Did you know?' facts to show on load. Keep these short and fun.
@@ -395,49 +397,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
 	// Fetch images from NASA APOD for a date range
 	async function fetchApod(startDate, endDate) {
-		// NASA APOD supports a range request with start_date & end_date
-		const params = new URLSearchParams({
-			api_key: API_KEY,
-			start_date: startDate,
-			end_date: endDate,
-		});
-		const url = `${NASA_API_URL}?${params.toString()}`;
+		// For classroom exercises we fetch the CDN JSON which returns an ARRAY of APOD-like objects.
+		// That file contains many dates; we'll fetch it once and then filter locally for the requested range.
+		const url = DATA_JSON_URL;
 
-	showMessage('🔄 Loading space photos…', 'loading');
+		showMessage('🔄 Loading space photos…', 'loading');
 
 		try {
-			// Retry loop for transient server errors (504, 502, 503) or network failures.
-			const maxAttempts = 3;
+			// Simple fetch (CDN is usually stable). Keep a small retry loop for transient network issues.
+			const maxAttempts = 2;
 			let attempt = 0;
-			let res;
+			let res = null;
 			for (; attempt < maxAttempts; attempt++) {
 				if (attempt > 0) {
-					const sr = document.getElementById('sr-live');
-					const msg = `Network issue, retrying (${attempt}/${maxAttempts - 1})...`;
-					showMessage(msg, 'loading');
-					if (sr) sr.textContent = msg;
-					// exponential backoff (250ms, 500ms, ...)
-					const backoff = 250 * Math.pow(2, attempt - 1);
+					const backoff = 250 * attempt;
 					await new Promise(r => setTimeout(r, backoff));
 				}
 				try {
 					res = await fetch(url);
 				} catch (netErr) {
-					// network-level failure (DNS, CORS blocked, offline). Continue to retry.
 					console.warn('Network fetch failed, will retry if attempts remain', netErr);
 					res = null;
 				}
 				if (res && res.ok) break;
-				// If we received a response but it's a server error that might be transient, retry.
-				if (res && ([502, 503, 504].includes(res.status))) {
-					console.warn(`Server returned ${res.status}, attempt ${attempt + 1} of ${maxAttempts}`);
-					continue;
-				}
-				// For other non-ok responses (4xx), don't retry.
-				if (res && !res.ok) break;
 			}
 
-			if (!res) throw new Error('Network failure while fetching APOD (no response)');
+			if (!res) throw new Error('Network failure while fetching APOD JSON (no response)');
 			if (!res.ok) {
 				const txt = await res.text();
 				throw new Error(`API error: ${res.status} ${txt}`);
@@ -448,10 +433,17 @@ document.addEventListener('DOMContentLoaded', () => {
 			// If single object returned, wrap into array
 			const items = Array.isArray(data) ? data : [data];
 
-			// Build a map of date -> item for quick lookup
+			// Build a map of date -> item for quick lookup, but only for the requested range
 			const itemsByDate = {};
+			const sDate = new Date(startDate);
+			const eDate = new Date(endDate);
 			items.forEach(it => {
-				if (it && it.date) itemsByDate[it.date] = it;
+				if (!it || !it.date) return;
+				const id = new Date(it.date);
+				if (isNaN(id.getTime())) return;
+				if (id >= sDate && id <= eDate) {
+					itemsByDate[it.date] = it;
+				}
 			});
 
 			// Render a 9-item gallery starting from the requested start date
